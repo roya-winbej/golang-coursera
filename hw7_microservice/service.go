@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -21,31 +20,27 @@ type myMicroservice struct {
 }
 
 func (s myMicroservice) Check(ctx context.Context, stub *Nothing) (*Nothing, error) {
-	fmt.Println("here")
+	granted, err := s.checkPermissions(ctx)
+	if !granted {
+		return nil, err
+	}
 
-	panic("implement me")
-	return nil, nil
+	return &Nothing{}, nil
 }
 
 func (s myMicroservice) Add(ctx context.Context, stub *Nothing) (*Nothing, error) {
-	fmt.Println("here")
-	return nil, nil
+	granted, err := s.checkPermissions(ctx)
+	if !granted {
+		return nil, err
+	}
+
+	return &Nothing{}, nil
 }
 
 func (s myMicroservice) Test(ctx context.Context, stub *Nothing) (*Nothing, error) {
-
-	md, _ := metadata.FromIncomingContext(ctx)
-
-	method, _ := grpc.Method(ctx)
-
-	consumer, ok := md["consumer"]
-	if !ok {
-		return nil, status.Error(codes.Unauthenticated, "unauthenticated consumer")
-	}
-
-	granted := s.checkPermissions(consumer[0], method)
+	granted, err := s.checkPermissions(ctx)
 	if !granted {
-		return nil, status.Error(codes.Unauthenticated, "unauthenticated consumer")
+		return nil, err
 	}
 
 	return &Nothing{}, nil
@@ -54,12 +49,21 @@ func (s myMicroservice) Test(ctx context.Context, stub *Nothing) (*Nothing, erro
 
 
 func (s myMicroservice) Logging(stub *Nothing, stream Admin_LoggingServer) error {
-	fmt.Println("here")
+	granted, err := s.checkPermissions(stream.Context())
+	if !granted {
+		return err
+	}
+
 	return nil
 }
 
 func (s myMicroservice) Statistics(statInverval *StatInterval, stream Admin_StatisticsServer) error {
-	panic("implement me")
+	granted, err := s.checkPermissions(stream.Context())
+	if !granted {
+		return err
+	}
+
+	return nil
 }
 
 type ACL struct {
@@ -67,13 +71,30 @@ type ACL struct {
 	Methods []string
 }
 
-func (s *myMicroservice) checkPermissions(user string, method string) bool {
+func (s *myMicroservice) checkPermissions(ctx context.Context) (bool, error) {
+
+	md, _ := metadata.FromIncomingContext(ctx)
+
+	method, _ := grpc.Method(ctx)
+
+	consumer, ok := md["consumer"]
+	if !ok {
+		return false, status.Error(codes.Unauthenticated, "unauthenticated consumer")
+	}
 
 	var permissionsGranted = false
 
 	for _, acl := range s.Acls {
-		if user == acl.User {
+		if consumer[0] == acl.User {
 			for _, aclMethod := range acl.Methods {
+				if strings.Contains(aclMethod, "*") {
+					rootMethod := strings.Replace(aclMethod, "*", "", -1)
+
+					if strings.Contains(method, rootMethod) {
+						permissionsGranted = true
+					}
+				}
+
 				if aclMethod == method {
 					permissionsGranted = true
 				}
@@ -81,7 +102,11 @@ func (s *myMicroservice) checkPermissions(user string, method string) bool {
 		}
 	}
 
-	return permissionsGranted
+	if !permissionsGranted {
+		return false, status.Error(codes.Unauthenticated, "unauthenticated consumer")
+	}
+
+	return permissionsGranted, nil
 }
 
 func parseACL(aclJSON string) ([]*ACL, error) {

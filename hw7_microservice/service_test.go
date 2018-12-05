@@ -157,8 +157,6 @@ func TestACL(t *testing.T) {
 		t.Fatalf("ACL fail: unexpected error: %v", err)
 	}
 
-	return
-
 	// ACL на методах, которые возвращают поток данных
 	logger, err := adm.Logging(getConsumerCtx("unknown"), &Nothing{})
 	_, err = logger.Recv()
