@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"github.com/grpc-ecosystem/go-grpc-middleware"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -20,49 +21,24 @@ type myMicroservice struct {
 }
 
 func (s myMicroservice) Check(ctx context.Context, stub *Nothing) (*Nothing, error) {
-	granted, err := s.checkPermissions(ctx)
-	if !granted {
-		return nil, err
-	}
-
 	return &Nothing{}, nil
 }
 
 func (s myMicroservice) Add(ctx context.Context, stub *Nothing) (*Nothing, error) {
-	granted, err := s.checkPermissions(ctx)
-	if !granted {
-		return nil, err
-	}
-
 	return &Nothing{}, nil
 }
 
 func (s myMicroservice) Test(ctx context.Context, stub *Nothing) (*Nothing, error) {
-	granted, err := s.checkPermissions(ctx)
-	if !granted {
-		return nil, err
-	}
-
 	return &Nothing{}, nil
 }
 
 
 
 func (s myMicroservice) Logging(stub *Nothing, stream Admin_LoggingServer) error {
-	granted, err := s.checkPermissions(stream.Context())
-	if !granted {
-		return err
-	}
-
 	return nil
 }
 
 func (s myMicroservice) Statistics(statInverval *StatInterval, stream Admin_StatisticsServer) error {
-	granted, err := s.checkPermissions(stream.Context())
-	if !granted {
-		return err
-	}
-
 	return nil
 }
 
@@ -152,13 +128,45 @@ func StartMyMicroservice(ctx context.Context, address string, aclData string) er
 	return nil
 }
 
+func aclInterceptor(
+	ctx context.Context,
+	req interface{},
+	info *grpc.UnaryServerInfo,
+	handler grpc.UnaryHandler,
+) (interface{}, error) {
+	granted, err := info.Server.(*myMicroservice).checkPermissions(ctx)
+	if !granted {
+		return nil, err
+	}
+
+	reply, err := handler(ctx, req)
+
+	return reply, err
+}
+
+func aclInterceptorStream(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+	granted, err := srv.(*myMicroservice).checkPermissions(ss.Context())
+	if !granted {
+		return err
+	}
+
+	return nil
+}
+
 func bootServer(ctx context.Context, address string, acl []*ACL) error {
 	lis, err := net.Listen("tcp", address)
 	if err != nil {
 		return err
 	}
 
-	s := grpc.NewServer()
+	s := grpc.NewServer(
+		grpc.StreamInterceptor(grpc_middleware.ChainStreamServer(
+			aclInterceptorStream,
+		)),
+		grpc.UnaryInterceptor(grpc_middleware.ChainUnaryServer(
+			aclInterceptor,
+		)),
+	)
 
 	service := &myMicroservice{
 		Acls: acl,
@@ -176,6 +184,8 @@ func bootServer(ctx context.Context, address string, acl []*ACL) error {
 
 	return nil
 }
+
+
 
 func listenShutdownServer(ctx context.Context, server *grpc.Server) {
 	for {
