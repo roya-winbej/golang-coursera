@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"github.com/grpc-ecosystem/go-grpc-middleware"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -11,6 +12,7 @@ import (
 	"log"
 	"net"
 	"strings"
+	"time"
 )
 
 // тут вы пишете код
@@ -18,6 +20,7 @@ import (
 
 type myMicroservice struct {
 	Acls []*ACL
+	logger chan *Event
 }
 
 func (s myMicroservice) Check(ctx context.Context, stub *Nothing) (*Nothing, error) {
@@ -32,13 +35,35 @@ func (s myMicroservice) Test(ctx context.Context, stub *Nothing) (*Nothing, erro
 	return &Nothing{}, nil
 }
 
-
+var logs = []Event{
+	Event{
+		Host: "event 1",
+	},
+	Event{
+		Host: "event 2",
+	},
+	Event{
+		Host: "event 3",
+	},
+	Event{
+		Host: "event 4",
+	},
+}
 
 func (s myMicroservice) Logging(stub *Nothing, stream Admin_LoggingServer) error {
+
+	select {
+	case event := <- s.logger:
+		log.Println("send to client")
+		if err := stream.Send(event); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
-func (s myMicroservice) Statistics(statInverval *StatInterval, stream Admin_StatisticsServer) error {
+func (s myMicroservice) Statistics(statInterval *StatInterval, stream Admin_StatisticsServer) error {
 	return nil
 }
 
@@ -144,11 +169,72 @@ func aclInterceptor(
 	return reply, err
 }
 
+func loggerInterceptor(
+	ctx context.Context,
+	req interface{},
+	info *grpc.UnaryServerInfo,
+	handler grpc.UnaryHandler,
+) (interface{}, error) {
+	method, _ := grpc.Method(ctx)
+	md, _ := metadata.FromIncomingContext(ctx)
+
+	consumer, _ := md["consumer"]
+	host, _ := md[":authority"]
+
+	evt := &Event{
+		Method: method,
+		Timestamp: time.Now().Unix(),
+		Consumer: consumer[0],
+		Host: host[0],
+	}
+
+	reply, err := handler(ctx, req)
+
+	log.Println("send to logger")
+	info.Server.(*myMicroservice).logger <- evt
+
+	return reply, err
+}
+
 func aclInterceptorStream(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 	granted, err := srv.(*myMicroservice).checkPermissions(ss.Context())
 	if !granted {
 		return err
 	}
+
+	err = handler(srv, ss)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func loggerInterceptorStream(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+
+	method, _ := grpc.Method(ss.Context())
+
+	fmt.Println(method)
+
+	// md, _ := metadata.FromIncomingContext(ss.Context())
+	//
+	// consumer, _ := md["consumer"]
+	// host, _ := md[":authority"]
+	//
+	// evt := &Event{
+	// 	Method: method,
+	// 	Timestamp: time.Now().Unix(),
+	// 	Consumer: consumer[0],
+	// 	Host: host[0],
+	// }
+
+	err := handler(srv, ss)
+	if err != nil {
+		return err
+	}
+
+	log.Println("send to stream")
+	// srv.(*myMicroservice).logger <- evt
 
 	return nil
 }
@@ -162,14 +248,17 @@ func bootServer(ctx context.Context, address string, acl []*ACL) error {
 	s := grpc.NewServer(
 		grpc.StreamInterceptor(grpc_middleware.ChainStreamServer(
 			aclInterceptorStream,
+			loggerInterceptorStream,
 		)),
 		grpc.UnaryInterceptor(grpc_middleware.ChainUnaryServer(
 			aclInterceptor,
+			loggerInterceptor,
 		)),
 	)
 
 	service := &myMicroservice{
 		Acls: acl,
+		logger: make(chan *Event),
 	}
 
 	RegisterAdminServer(s, service)

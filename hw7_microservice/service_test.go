@@ -211,15 +211,16 @@ func TestLogging(t *testing.T) {
 		defer wg.Done()
 		for i := 0; i < 4; i++ {
 			evt, err := logStream1.Recv()
-			// log.Println("logger 1", evt, err)
+			log.Println("logger 1", evt, err)
 			if err != nil {
 				t.Errorf("unexpected error: %v, awaiting event", err)
 				return
 			}
-			if !strings.HasPrefix(evt.GetHost(), "127.0.0.1:") || evt.GetHost() == listenAddr {
+			if !strings.HasPrefix(evt.GetHost(), "127.0.0.1:") || evt.GetHost() != listenAddr {
 				t.Errorf("bad host: %v", evt.GetHost())
 				return
 			}
+
 			evt.Host = "" // для тестов
 			evt.Timestamp = 0
 			logData1 = append(logData1, evt)
@@ -229,12 +230,12 @@ func TestLogging(t *testing.T) {
 		defer wg.Done()
 		for i := 0; i < 3; i++ {
 			evt, err := logStream2.Recv()
-			// log.Println("logger 2", evt, err)
+			log.Println("logger 2", evt, err)
 			if err != nil {
 				t.Errorf("unexpected error: %v, awaiting event", err)
 				return
 			}
-			if !strings.HasPrefix(evt.GetHost(), "127.0.0.1:") || evt.GetHost() == listenAddr {
+			if !strings.HasPrefix(evt.GetHost(), "127.0.0.1:") || evt.GetHost() != listenAddr {
 				t.Errorf("bad host: %v", evt.GetHost())
 				return
 			}
